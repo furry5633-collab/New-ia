@@ -1,0 +1,6 @@
+{
+  "name": "Math Tutor",
+  "description": "Tutor socrático minimalista de matemáticas que guía paso a paso problemas de cálculo y álgebra.",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
