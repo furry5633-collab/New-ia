@@ -93,7 +93,7 @@ async function generateWithFallback(ai: GoogleGenAI, contents: any[], systemInst
       });
 
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout tras 9s en modelo ${model}`)), 9000)
+        setTimeout(() => reject(new Error(`Timeout tras 25s en modelo ${model}`)), 25000)
       );
 
       const response: any = await Promise.race([generatePromise, timeoutPromise]);

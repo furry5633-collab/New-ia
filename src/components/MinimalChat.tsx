@@ -315,7 +315,7 @@ export const MinimalChat: React.FC<MinimalChatProps> = ({
               rows={1}
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder="Escribe un ejercicio o haz una pregunta..."
+              placeholder="Escribe un mensaje..."
               className="w-full px-3 py-2 bg-transparent text-stone-100 placeholder-stone-500 text-sm focus:outline-hidden resize-none max-h-44 min-h-[36px]"
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {

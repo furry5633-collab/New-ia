@@ -67,7 +67,7 @@ async function generateWithFallback(ai: GoogleGenAI, contents: any[], systemInst
       });
 
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error(`Timeout en modelo ${model}`)), 12000)
+        setTimeout(() => reject(new Error(`Timeout en modelo ${model}`)), 25000)
       );
 
       const response: any = await Promise.race([generatePromise, timeoutPromise]);
