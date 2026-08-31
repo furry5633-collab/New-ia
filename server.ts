@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 
 dotenv.config();
 
@@ -14,6 +14,26 @@ const PORT = 3000;
 
 app.use(express.json({ limit: '30mb' }));
 app.use(express.urlencoded({ extended: true, limit: '30mb' }));
+
+// Initialize GoogleGenAI client
+let aiClient: GoogleGenAI | null = null;
+function getAIClient(): GoogleGenAI {
+  if (!aiClient) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY no está configurada.');
+    }
+    aiClient = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+  }
+  return aiClient;
+}
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
@@ -40,41 +60,72 @@ REGLAS FUNDAMENTALES:
    - Usa siempre LaTeX limpio ($ y $$) para que los números, fracciones y signos matemáticos se vean bonitos.
    - Lenguaje claro, positivo y motivador.`;
 
-const FALLBACK_MODELS = [
-  'gemini-3.6-flash',
+// Ultra-fast official models in order of priority: gemini-3.1-flash-lite gives sub-second responses
+const MODELS = [
+  'gemini-3.1-flash-lite',
   'gemini-3.7-flash',
-  'gemini-3.1-pro-preview',
-  'gemini-3.0-flash',
 ];
 
 async function generateWithFallback(ai: GoogleGenAI, contents: any[], systemInstruction: string) {
   let lastError: any = null;
 
-  for (const model of FALLBACK_MODELS) {
+  for (const model of MODELS) {
     try {
-      console.log(`[Math AI] Generando con modelo: ${model}`);
-      const response = await ai.models.generateContent({
+      console.log(`[Math AI] Generando con modelo de alta velocidad: ${model}`);
+      const isFlash37 = model === 'gemini-3.7-flash';
+      
+      const config: any = {
+        systemInstruction: {
+          parts: [{ text: systemInstruction }],
+        },
+        temperature: 0.3,
+      };
+
+      if (isFlash37) {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      }
+
+      // Per-model timeout race to avoid stalling if a single endpoint has network jitter
+      const generatePromise = ai.models.generateContent({
         model,
         contents,
-        config: {
-          systemInstruction: {
-            parts: [{ text: systemInstruction }],
-          },
-          temperature: 0.3,
-        },
+        config,
       });
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error(`Timeout tras 9s en modelo ${model}`)), 9000)
+      );
+
+      const response: any = await Promise.race([generatePromise, timeoutPromise]);
 
       if (response && response.text) {
         return response.text;
       }
     } catch (err: any) {
-      console.warn(`[Math AI] Error en ${model}: ${err?.message || err}. Probando alternativa...`);
+      console.warn(`[Math AI] Error o timeout en ${model}: ${err?.message || err}. Probando modelo de respaldo...`);
       lastError = err;
-      await new Promise((resolve) => setTimeout(resolve, 200));
     }
   }
 
-  throw lastError || new Error('No se pudo obtener respuesta de los modelos de IA.');
+  throw lastError || new Error('No se pudo obtener respuesta del modelo de IA.');
+}
+
+// Background warmup to eliminate cold-start latency for the user's first message
+function warmupModel() {
+  try {
+    const ai = getAIClient();
+    ai.models.generateContent({
+      model: 'gemini-3.1-flash-lite',
+      contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+      config: { temperature: 0.1 },
+    }).then(() => {
+      console.log('[Math AI] Warmup inicial completado con éxito.');
+    }).catch((e) => {
+      console.log('[Math AI] Warmup en segundo plano:', e?.message || e);
+    });
+  } catch (e) {
+    // Ignore warmup error if key is not yet ready at load
+  }
 }
 
 app.post('/api/tutor/chat', async (req, res) => {
@@ -85,43 +136,49 @@ app.post('/api/tutor/chat', async (req, res) => {
       return res.status(400).json({ error: 'Formato de mensajes inválido.' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      return res.status(500).json({
-        error: 'GEMINI_API_KEY no está configurada.',
-      });
+    const ai = getAIClient();
+
+    // Limit conversation context to the latest 12 messages for ultra-fast processing
+    const recentMessages = messages.slice(-12);
+
+    const contents = recentMessages
+      .map((m: any) => {
+        const parts: any[] = [];
+
+        if (m.image && m.image.data && m.image.mimeType) {
+          parts.push({
+            inlineData: {
+              mimeType: m.image.mimeType,
+              data: m.image.data,
+            },
+          });
+        }
+
+        if (m.content && typeof m.content === 'string' && m.content.trim().length > 0) {
+          parts.push({ text: m.content });
+        }
+
+        if (parts.length === 0) {
+          return null;
+        }
+
+        return {
+          role: m.role === 'user' ? 'user' : 'model',
+          parts,
+        };
+      })
+      .filter(Boolean);
+
+    if (contents.length === 0) {
+      return res.status(400).json({ error: 'No hay contenido válido para procesar.' });
     }
-
-    const ai = new GoogleGenAI({ apiKey });
-
-    const contents = messages.map((m: any) => {
-      const parts: any[] = [];
-
-      if (m.image && m.image.data && m.image.mimeType) {
-        parts.push({
-          inlineData: {
-            mimeType: m.image.mimeType,
-            data: m.image.data,
-          },
-        });
-      }
-
-      if (m.content) {
-        parts.push({ text: m.content });
-      }
-
-      return {
-        role: m.role === 'user' ? 'user' : 'model',
-        parts,
-      };
-    });
 
     const text = await generateWithFallback(ai, contents, MATH_SYSTEM_INSTRUCTION);
     res.json({ text });
   } catch (error: any) {
     console.error('Error en /api/tutor/chat:', error);
     res.status(500).json({
-      error: error?.message || 'Error interno al procesar el cálculo.',
+      error: error?.message || 'Error al procesar la respuesta.',
     });
   }
 });
@@ -144,6 +201,8 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`> Server running on http://localhost:${PORT}`);
+    // Warm up model in background to eliminate first-message lag
+    warmupModel();
   });
 }
 
