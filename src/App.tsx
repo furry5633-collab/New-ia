@@ -687,9 +687,19 @@ export default function App() {
 
       clearTimeout(timeoutId);
 
-      const data = await response.json();
+      let data: any;
+      const responseText = await response.text();
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        if (!response.ok) {
+          throw new Error(`El servidor devolvió un error (${response.status}). Si estás en Vercel, asegúrate de añadir la variable de entorno GEMINI_API_KEY en la configuración de tu proyecto.`);
+        }
+        throw new Error('Respuesta no válida del servidor.');
+      }
+
       if (!response.ok) {
-        throw new Error(data.error || 'Error al comunicarse con el servidor.');
+        throw new Error(data?.error || `Error ${response.status}: No se pudo comunicar con el tutor.`);
       }
 
       const assistantText = data.text || '';
